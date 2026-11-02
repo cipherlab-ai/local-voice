@@ -7,20 +7,42 @@ public class Transcriber {
     public let executionRoute = STTExecutionRoute.localProcess
     public let modelSize: String
     private let language: String
+    private let whisperBinaryResolver: () -> String?
+    private let modelResolver: (String) -> String?
+    private let timeoutResolver: (URL) -> TimeInterval
     public var spokenPunctuation: Bool = false
     public var initialPrompt: String?
 
-    public init(modelSize: String = "base.en", language: String = "en") {
+    public convenience init(modelSize: String = "base.en", language: String = "en") {
+        self.init(
+            modelSize: modelSize,
+            language: language,
+            whisperBinaryResolver: Transcriber.findWhisperBinary,
+            modelResolver: { Transcriber.findModel(modelSize: $0) },
+            timeoutResolver: { InferenceTimeout.cliSeconds(forAudioURL: $0) }
+        )
+    }
+
+    init(
+        modelSize: String,
+        language: String,
+        whisperBinaryResolver: @escaping () -> String?,
+        modelResolver: @escaping (String) -> String?,
+        timeoutResolver: @escaping (URL) -> TimeInterval
+    ) {
         self.modelSize = modelSize
         self.language = language
+        self.whisperBinaryResolver = whisperBinaryResolver
+        self.modelResolver = modelResolver
+        self.timeoutResolver = timeoutResolver
     }
 
     public func transcribe(audioURL: URL) throws -> String {
-        guard let whisperPath = Transcriber.findWhisperBinary() else {
+        guard let whisperPath = whisperBinaryResolver() else {
             throw TranscriberError.whisperNotFound
         }
 
-        guard let modelPath = Transcriber.findModel(modelSize: modelSize) else {
+        guard let modelPath = modelResolver(modelSize) else {
             throw TranscriberError.modelNotFound(modelSize)
         }
 
@@ -48,7 +70,7 @@ public class Transcriber {
 
         try process.run()
 
-        let timeout = InferenceTimeout.cliSeconds(forAudioURL: audioURL)
+        let timeout = timeoutResolver(audioURL)
         var stderrData = Data()
         var stdoutData = Data()
         let finished = DispatchSemaphore(value: 0)
@@ -88,7 +110,7 @@ public class Transcriber {
     }
 
     public func isAvailable() -> Bool {
-        Self.findWhisperBinary() != nil && Self.findModel(modelSize: modelSize) != nil
+        whisperBinaryResolver() != nil && modelResolver(modelSize) != nil
     }
 
     public func warmup() {
