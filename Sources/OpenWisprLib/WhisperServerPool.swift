@@ -121,15 +121,13 @@ public final class WhisperServerPool: STTEngine {
         request.timeoutInterval = httpTimeout
 
         let sem = DispatchSemaphore(value: 0)
+        var statusCode: Int?
         var responseData: Data?
-        var responseError: Error?
+        var transportError: Error?
         let task = URLSession.shared.dataTask(with: request) { data, response, error in
+            statusCode = (response as? HTTPURLResponse)?.statusCode
             responseData = data
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                responseError = WhisperServerError.httpError(http.statusCode)
-            } else {
-                responseError = error
-            }
+            transportError = error
             sem.signal()
         }
         task.resume()
@@ -138,11 +136,27 @@ public final class WhisperServerPool: STTEngine {
             task.cancel()
             throw WhisperServerError.timeout
         }
-        if let responseError { throw responseError }
-        guard let data = responseData else { throw WhisperServerError.emptyResponse }
+        if let transportError, (statusCode ?? 200) == 200 {
+            throw transportError
+        }
+        return try Self.parseInferenceResponse(statusCode: statusCode, data: responseData)
+    }
 
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let text = json["text"] as? String {
+    static func parseInferenceResponse(statusCode: Int?, data: Data?) throws -> String {
+        if let statusCode, statusCode != 200 {
+            throw WhisperServerError.httpError(statusCode)
+        }
+        guard let data, !data.isEmpty else {
+            throw WhisperServerError.emptyResponse
+        }
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let error = json["error"] {
+                let message = error as? String ?? String(describing: error)
+                throw WhisperServerError.serverError(message)
+            }
+            guard let text = json["text"] as? String else {
+                throw WhisperServerError.serverError("response missing \"text\"")
+            }
             return Transcriber.stripWhisperMarkers(text)
         }
         let plain = String(data: data, encoding: .utf8) ?? ""
@@ -256,6 +270,7 @@ enum WhisperServerError: LocalizedError {
     case startTimeout
     case timeout
     case httpError(Int)
+    case serverError(String)
     case emptyResponse
 
     var errorDescription: String? {
@@ -264,6 +279,7 @@ enum WhisperServerError: LocalizedError {
         case .startTimeout: return "whisper-server failed to start"
         case .timeout: return "whisper-server inference timed out"
         case .httpError(let c): return "whisper-server HTTP \(c)"
+        case .serverError(let message): return "whisper-server error: \(message)"
         case .emptyResponse: return "whisper-server returned empty response"
         }
     }
