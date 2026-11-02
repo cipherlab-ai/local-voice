@@ -368,6 +368,37 @@ final class STTRouterTests: XCTestCase {
         XCTAssertEqual(router.activeExecutionRoute(), .localProcess)
     }
 
+    func testWhisperServerErrorResponseFallsBackToCLI() throws {
+        let parakeet = EngineStub(
+            name: "parakeet",
+            route: .localProcess,
+            available: false
+        )
+        let whisper = EngineStub(
+            name: "whisper-server",
+            route: .localLoopback,
+            transcribeError: WhisperServerError.serverError("failed to read audio")
+        )
+        let cli = EngineStub(
+            name: "whisper-cli",
+            route: .localProcess,
+            transcript: "one shot"
+        )
+        let router = makeRouter(
+            preferred: .auto,
+            parakeet: parakeet,
+            whisper: whisper,
+            cli: cli
+        )
+
+        let text = try router.transcribe(audioURL: fixtureURL())
+
+        XCTAssertEqual(text, "one shot")
+        XCTAssertEqual(whisper.transcribeCount, 1)
+        XCTAssertEqual(cli.transcribeCount, 1)
+        XCTAssertEqual(router.activeEngineName(), "whisper-cli")
+    }
+
     func testLongInteractiveEmptyPersistentResultFallsBackToCLI() throws {
         let parakeet = EngineStub(
             name: "parakeet",
