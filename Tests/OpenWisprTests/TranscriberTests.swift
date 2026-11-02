@@ -117,24 +117,24 @@ final class TranscriberProcessTests: XCTestCase {
     private var audioURL: URL!
     private var modelPath: String!
 
-    override func setUp() throws {
-        try super.setUp()
+    override func setUp() {
+        super.setUp()
         temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("TranscriberProcessTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(
+        XCTAssertNoThrow(try FileManager.default.createDirectory(
             at: temporaryDirectory,
             withIntermediateDirectories: true
-        )
+        ))
         audioURL = temporaryDirectory.appendingPathComponent("take.wav")
-        try Data([0x52, 0x49, 0x46, 0x46]).write(to: audioURL)
+        XCTAssertNoThrow(try Data([0x52, 0x49, 0x46, 0x46]).write(to: audioURL))
         let modelURL = temporaryDirectory.appendingPathComponent("ggml-test.bin")
-        try Data([0x01]).write(to: modelURL)
+        XCTAssertNoThrow(try Data([0x01]).write(to: modelURL))
         modelPath = modelURL.path
     }
 
-    override func tearDown() throws {
-        try FileManager.default.removeItem(at: temporaryDirectory)
-        try super.tearDown()
+    override func tearDown() {
+        XCTAssertNoThrow(try FileManager.default.removeItem(at: temporaryDirectory))
+        super.tearDown()
     }
 
     private func makeStub(_ body: String) -> String {
