@@ -154,14 +154,24 @@ final class TranscriberProcessTests: XCTestCase {
     private func makeTranscriber(
         binary: String?,
         model: String?,
-        timeout: TimeInterval = 10
+        timeout: TimeInterval = 10,
+        readyFile: URL? = nil
     ) -> Transcriber {
         Transcriber(
             modelSize: "test",
             language: "en",
             whisperBinaryResolver: { binary },
             modelResolver: { _ in model },
-            timeoutResolver: { _ in timeout }
+            timeoutResolver: { _ in
+                // Runs after process.run(): hold the deadline until the stub is ready.
+                if let readyFile {
+                    let deadline = Date().addingTimeInterval(10)
+                    while !FileManager.default.fileExists(atPath: readyFile.path), Date() < deadline {
+                        Thread.sleep(forTimeInterval: 0.05)
+                    }
+                }
+                return timeout
+            }
         )
     }
 
@@ -224,9 +234,10 @@ final class TranscriberProcessTests: XCTestCase {
     func testTimeoutThrowsAndKillsProcessIgnoringSIGTERM() throws {
         let pidFile = temporaryDirectory.appendingPathComponent("stub.pid")
         let transcriber = makeTranscriber(
-            binary: makeStub("trap '' TERM\necho $$ > \"\(pidFile.path)\"\nexec sleep 30"),
+            binary: makeStub("trap '' TERM\necho $$ > \"\(pidFile.path).tmp\"\nmv \"\(pidFile.path).tmp\" \"\(pidFile.path)\"\nexec sleep 30"),
             model: modelPath,
-            timeout: 0.5
+            timeout: 0.5,
+            readyFile: pidFile
         )
         let startedAt = Date()
 
@@ -253,10 +264,17 @@ final class TranscriberProcessTests: XCTestCase {
 
     func testTimeoutKillsCooperativeProcessViaTerminate() throws {
         let pidFile = temporaryDirectory.appendingPathComponent("stub.pid")
+        let termFile = temporaryDirectory.appendingPathComponent("stub.term")
         let transcriber = makeTranscriber(
-            binary: makeStub("echo $$ > \"\(pidFile.path)\"\nexec sleep 30"),
+            binary: makeStub(
+                "trap 'echo term > \"\(termFile.path)\"; kill $child 2>/dev/null; exit 143' TERM\n"
+                    + "sleep 30 &\nchild=$!\n"
+                    + "echo $$ > \"\(pidFile.path).tmp\"\nmv \"\(pidFile.path).tmp\" \"\(pidFile.path)\"\n"
+                    + "wait $child"
+            ),
             model: modelPath,
-            timeout: 0.5
+            timeout: 0.5,
+            readyFile: pidFile
         )
 
         XCTAssertThrowsError(try transcriber.transcribe(audioURL: audioURL)) { error in
@@ -276,6 +294,10 @@ final class TranscriberProcessTests: XCTestCase {
         XCTAssertTrue(
             processIsDead(pid, within: 3),
             "whisper-cli stub still running after timeout"
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: termFile.path),
+            "stub was not sent SIGTERM; only the SIGKILL fallback reached it"
         )
     }
 }
